@@ -23,7 +23,6 @@ if not VECTOR_STORE_ID:
     raise RuntimeError("Нет VECTOR_STORE_ID")
 
 allowed_ids = set()
-
 if ALLOWED_USER_IDS:
     for x in ALLOWED_USER_IDS.split(","):
         x = x.strip()
@@ -52,6 +51,7 @@ SYSTEM_INSTRUCTIONS = """
 7. Не отвечай общими фразами вроде "буду учитывать это дальше". Сразу отвечай по существу.
 8. Если вопрос связан с предыдущим, не пиши "В базе знаний этого нет", пока не попробуешь связать его с предыдущим вопросом.
 9. Если ответа нет, сначала коротко напиши, что именно в базе знаний не найдено.
+10. Обращайся к пользователю естественно, по имени.
 
 Формат ответа:
 1. Коротко
@@ -60,6 +60,7 @@ SYSTEM_INSTRUCTIONS = """
 
 Пиши простым рабочим языком.
 """
+
 
 async def init_db():
     async with aiosqlite.connect(DB_PATH) as db:
@@ -83,7 +84,7 @@ async def save_message(chat_id, role, content):
         await db.commit()
 
 
-async def get_recent_messages(chat_id, limit=20):
+async def get_recent_messages(chat_id, limit=30):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
@@ -169,29 +170,29 @@ async def handle_question(message: types.Message):
 
     history = await get_recent_messages(chat_id, limit=30)
 
-input_data = [
-    {"role": "system", "content": SYSTEM_INSTRUCTIONS},
-    {
-        "role": "system",
-        "content": f"Пользователя зовут: {display_name}. Обращайся к нему естественно, по имени, без перебора."
-    },
-    {
-        "role": "system",
-        "content": (
-            "Если последнее сообщение пользователя короткое или начинается с "
-            "'а', 'а если', 'а кто', 'а когда', 'а что', "
-            "считай его продолжением предыдущего вопроса в этом чате."
-        )
-    },
-    {
-        "role": "system",
-        "content": (
-            "Сначала определи, является ли вопрос продолжением предыдущего диалога. "
-            "Потом найди ответ в базе знаний. "
-            "Если вопрос неполный, отвечай с учетом предыдущего контекста."
-        )
-    }
-]
+    input_data = [
+        {"role": "system", "content": SYSTEM_INSTRUCTIONS},
+        {
+            "role": "system",
+            "content": f"Пользователя зовут: {display_name}. Обращайся к нему естественно, по имени, без перебора."
+        },
+        {
+            "role": "system",
+            "content": (
+                "Если последнее сообщение пользователя короткое или начинается с "
+                "'а', 'а если', 'а кто', 'а когда', 'а что', "
+                "считай его продолжением предыдущего вопроса в этом чате."
+            )
+        },
+        {
+            "role": "system",
+            "content": (
+                "Сначала определи, является ли вопрос продолжением предыдущего диалога. "
+                "Потом найди ответ в базе знаний. "
+                "Если вопрос неполный, отвечай с учетом предыдущего контекста."
+            )
+        }
+    ]
 
     for item in history:
         input_data.append({
@@ -214,7 +215,7 @@ input_data = [
 
         answer = (resp.output_text or "").strip()
 
-        if not answer or not answer.strip():
+        if not answer:
             answer = "Не смог сформировать ответ. Попробуй уточнить вопрос."
 
         await save_message(chat_id, "assistant", answer)
