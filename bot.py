@@ -1,9 +1,11 @@
 import os
 import asyncio
 from dotenv import load_dotenv
+from memory import init_db, save_message, get_recent_messages, clear_chat_history
 
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
+from aiogram.filters import Command
 
 from openai import OpenAI
 
@@ -61,28 +63,47 @@ async def start(message: types.Message):
         "Я отвечаю только по документам из базы знаний."
     )
 
+@dp.message(Command("clear"))
+async def clear_handler(message: types.Message):
+    chat_id = str(message.chat.id)
+    await clear_chat_history(chat_id)
+    await message.answer("История этого чата очищена.")
+
 @dp.message()
 async def handle_question(message: types.Message):
-    # Доступ только для списка (если задан)
     if allowed_ids and message.from_user and message.from_user.id not in allowed_ids:
-        await message.answer("Доступ ограничен. Напиши РОПу, чтобы добавили тебя в список.")
+        await message.answer("Доступ ограничен. Обратись к руководителю, чтобы тебя добавили.")
         return
 
-    question = message.text.strip()
+    question = (message.text or "").strip()
     if not question:
-        await message.answer("Напиши вопрос текстом 🙂")
+        await message.answer("Напиши вопрос текстом.")
         return
 
-    await message.answer("Понял. Ищу в базе знаний...")
+    chat_id = str(message.chat.id)
+
+    # Сохраняем вопрос пользователя
+    await save_message(chat_id, "user", question)
+
+    # Берём последние сообщения из этого чата
+    history = await get_recent_messages(chat_id, limit=10)
+
+    input_data = [
+        {"role": "system", "content": SYSTEM_INSTRUCTIONS}
+    ]
+
+    for item in history:
+        input_data.append({
+            "role": item["role"],
+            "content": item["content"]
+        })
+
+    await message.answer("Понял. Думаю...")
 
     try:
-        # Responses API + file_search по vector_store
         resp = client.responses.create(
             model="gpt-4.1",
-            input=[
-                {"role": "system", "content": SYSTEM_INSTRUCTIONS},
-                {"role": "user", "content": question}
-            ],
+            input=input_data,
             tools=[{
                 "type": "file_search",
                 "vector_store_ids": [VECTOR_STORE_ID],
@@ -91,16 +112,26 @@ async def handle_question(message: types.Message):
         )
 
         answer = resp.output_text
+
         if not answer or not answer.strip():
-            await message.answer("Не смог сформировать ответ. Попробуй переформулировать вопрос.")
-            return
+            answer = "Не смог сформировать ответ. Попробуй уточнить вопрос."
+
+        # Сохраняем ответ бота
+        await save_message(chat_id, "assistant", answer)
 
         await message.answer(answer)
 
     except Exception as e:
-        await message.answer(f"Ошибка: {type(e).__name__}\n{e}")
+        text = str(e)
+        if "insufficient_quota" in text or "Error code: 429" in text:
+            await message.answer(
+                "Сейчас AI-ответы временно недоступны: закончился лимит OpenAI API."
+            )
+        else:
+            await message.answer(f"Ошибка: {type(e).__name__}\n{e}")
 
 async def main():
+    await init_db()
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     await dp.start_polling(bot)
 
