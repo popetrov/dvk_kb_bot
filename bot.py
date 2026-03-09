@@ -52,6 +52,7 @@ SUPPORTED_EXTENSIONS = {
 }
 
 waiting_for_kb_file = set()
+waiting_for_kb_delete = set()
 
 SYSTEM_INSTRUCTIONS = """
 Ты — внутренний ассистент ДВК Финанс по бизнес-процессам.
@@ -167,6 +168,25 @@ async def save_kb_file_id(filename: str, openai_file_id: str):
         await db.commit()
 
 
+async def get_all_kb_files():
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT filename FROM kb_files ORDER BY filename"
+        )
+        rows = await cursor.fetchall()
+
+    return [r[0] for r in rows]
+
+
+async def delete_kb_file(filename: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            "DELETE FROM kb_files WHERE filename = ?",
+            (filename,)
+        )
+        await db.commit()
+
+
 def get_display_name(user: types.User) -> str:
     if user.first_name and user.first_name.strip():
         return user.first_name.strip()
@@ -201,7 +221,11 @@ async def start_handler(message: types.Message):
         f"Привет, {display_name}.\n\n"
         f"Я бот базы знаний ДВК Финанс.\n"
         f"Задай вопрос по бизнес-процессам, мониторингу или регламентам.\n\n"
-        f"Если хочешь начать диалог заново, отправь /clear"
+        f"Команды:\n"
+        f"/clear — очистить историю диалога\n"
+        f"/whoami — показать твои данные Telegram\n"
+        f"/update_kb — обновить базу знаний (только для админа)\n"
+        f"/kb_delete — удалить файл из базы знаний (только для админа)"
     )
 
 
@@ -245,11 +269,36 @@ async def update_kb_handler(message: types.Message):
 
     chat_id = str(message.chat.id)
     waiting_for_kb_file.add(chat_id)
+    waiting_for_kb_delete.discard(chat_id)
 
     await message.answer(
         "Пришли файл документом для обновления базы знаний.\n\n"
         "Поддерживаются форматы: doc, docx, pdf, txt, md, xls, xlsx, csv, ppt, pptx, odt, html, json, xml, zip."
     )
+
+
+@dp.message(Command("kb_delete"))
+async def kb_delete_command(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администраторам.")
+        return
+
+    files = await get_all_kb_files()
+
+    if not files:
+        await message.answer("В базе знаний пока нет файлов.")
+        return
+
+    chat_id = str(message.chat.id)
+    waiting_for_kb_delete.add(chat_id)
+    waiting_for_kb_file.discard(chat_id)
+
+    text = "Файлы в базе знаний:\n\n"
+    for f in files:
+        text += f"• {f}\n"
+
+    text += "\nОтправь точное имя файла, который нужно удалить."
+    await message.answer(text)
 
 
 @dp.message(F.document)
@@ -326,9 +375,57 @@ async def document_handler(message: types.Message):
 
     finally:
         waiting_for_kb_file.discard(chat_id)
-
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+@dp.message(F.text)
+async def delete_filename_handler(message: types.Message):
+    chat_id = str(message.chat.id)
+
+    if chat_id not in waiting_for_kb_delete:
+        return
+
+    if not is_admin(message.from_user.id):
+        waiting_for_kb_delete.discard(chat_id)
+        await message.answer("Удаление доступно только администраторам.")
+        return
+
+    filename = (message.text or "").strip()
+    display_name = get_display_name(message.from_user)
+
+    if not filename:
+        waiting_for_kb_delete.discard(chat_id)
+        await message.answer("Имя файла не указано.")
+        return
+
+    file_id = await get_kb_file_id(filename)
+
+    if not file_id:
+        waiting_for_kb_delete.discard(chat_id)
+        await message.answer(f"{display_name}, файл с именем «{filename}» не найден в базе знаний.")
+        return
+
+    await message.answer(f"{display_name}, удаляю файл «{filename}» из базы знаний...")
+
+    try:
+        client.vector_stores.files.delete(
+            vector_store_id=VECTOR_STORE_ID,
+            file_id=file_id
+        )
+
+        await delete_kb_file(filename)
+
+        await message.answer(f"{display_name}, файл «{filename}» удалён из базы знаний.")
+
+    except Exception as e:
+        await message.answer(
+            f"{display_name}, не удалось удалить файл «{filename}».\n\n"
+            f"Ошибка: {type(e).__name__}\n{e}"
+        )
+
+    finally:
+        waiting_for_kb_delete.discard(chat_id)
 
 
 @dp.message()
