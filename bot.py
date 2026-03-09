@@ -1,6 +1,8 @@
 import os
 import asyncio
 import tempfile
+from pathlib import Path
+
 import aiosqlite
 from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher, types, F
@@ -78,7 +80,15 @@ SYSTEM_INSTRUCTIONS = """
 """
 
 
+def ensure_db_path():
+    db_file = Path(DB_PATH)
+    if db_file.parent and str(db_file.parent) not in (".", ""):
+        db_file.parent.mkdir(parents=True, exist_ok=True)
+
+
 async def init_db():
+    ensure_db_path()
+
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute("""
         CREATE TABLE IF NOT EXISTS chat_history (
