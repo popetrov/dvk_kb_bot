@@ -1,8 +1,9 @@
 import os
 import asyncio
+import tempfile
 import aiosqlite
 from dotenv import load_dotenv
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from openai import OpenAI
 
@@ -12,6 +13,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
 ALLOWED_USER_IDS = os.getenv("ALLOWED_USER_IDS", "")
+ADMIN_USER_IDS = os.getenv("ADMIN_USER_IDS", "")
+DB_PATH = os.getenv("DB_PATH", "/data/bot_data.db")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Нет TELEGRAM_BOT_TOKEN")
@@ -29,11 +32,24 @@ if ALLOWED_USER_IDS:
         if x.isdigit():
             allowed_ids.add(int(x))
 
+admin_ids = set()
+if ADMIN_USER_IDS:
+    for x in ADMIN_USER_IDS.split(","):
+        x = x.strip()
+        if x.isdigit():
+            admin_ids.add(int(x))
+
 bot = Bot(token=TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-DB_PATH = "memory.db"
+SUPPORTED_EXTENSIONS = {
+    ".doc", ".docx", ".pdf", ".txt", ".md", ".markdown",
+    ".xls", ".xlsx", ".csv", ".rtf", ".xml", ".json",
+    ".ppt", ".pptx", ".odt", ".html", ".htm", ".zip"
+}
+
+waiting_for_kb_file = set()
 
 SYSTEM_INSTRUCTIONS = """
 Ты — внутренний ассистент ДВК Финанс по бизнес-процессам.
@@ -50,7 +66,7 @@ SYSTEM_INSTRUCTIONS = """
 6. Если есть несколько вариантов трактовки, выбирай тот, который лучше всего соответствует последним сообщениям диалога.
 7. Не отвечай общими фразами вроде "буду учитывать это дальше". Сразу отвечай по существу.
 8. Если вопрос связан с предыдущим, не пиши "В базе знаний этого нет", пока не попробуешь связать его с предыдущим вопросом.
-9. Если ответа нет, сначала коротко напиши, что именно в базе знаний не найдено.
+9. Если ответа нет, сначала коротко напиши, что именно не найдено.
 10. Обращайся к пользователю естественно, по имени.
 
 Формат ответа:
@@ -72,10 +88,17 @@ async def init_db():
             content TEXT
         )
         """)
+        await db.execute("""
+        CREATE TABLE IF NOT EXISTS kb_files (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            filename TEXT UNIQUE,
+            openai_file_id TEXT NOT NULL
+        )
+        """)
         await db.commit()
 
 
-async def save_message(chat_id, role, content):
+async def save_message(chat_id: str, role: str, content: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "INSERT INTO chat_history (chat_id, role, content) VALUES (?, ?, ?)",
@@ -84,7 +107,7 @@ async def save_message(chat_id, role, content):
         await db.commit()
 
 
-async def get_recent_messages(chat_id, limit=30):
+async def get_recent_messages(chat_id: str, limit: int = 30):
     async with aiosqlite.connect(DB_PATH) as db:
         cursor = await db.execute(
             """
@@ -102,11 +125,34 @@ async def get_recent_messages(chat_id, limit=30):
     return [{"role": row[0], "content": row[1]} for row in rows]
 
 
-async def clear_chat_history(chat_id):
+async def clear_chat_history(chat_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
             "DELETE FROM chat_history WHERE chat_id = ?",
             (chat_id,),
+        )
+        await db.commit()
+
+
+async def get_kb_file_id(filename: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        cursor = await db.execute(
+            "SELECT openai_file_id FROM kb_files WHERE filename = ?",
+            (filename,)
+        )
+        row = await cursor.fetchone()
+        return row[0] if row else None
+
+
+async def save_kb_file_id(filename: str, openai_file_id: str):
+    async with aiosqlite.connect(DB_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO kb_files (filename, openai_file_id)
+            VALUES (?, ?)
+            ON CONFLICT(filename) DO UPDATE SET openai_file_id = excluded.openai_file_id
+            """,
+            (filename, openai_file_id)
         )
         await db.commit()
 
@@ -121,9 +167,19 @@ def get_display_name(user: types.User) -> str:
     return "котик-продаван"
 
 
+def is_allowed(user_id: int) -> bool:
+    if not allowed_ids:
+        return True
+    return user_id in allowed_ids
+
+
+def is_admin(user_id: int) -> bool:
+    return user_id in admin_ids
+
+
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
-    if allowed_ids and message.from_user.id not in allowed_ids:
+    if not is_allowed(message.from_user.id):
         await message.answer(
             f"У вас нет доступа к базе знаний.\n\nВаш Telegram ID: {message.from_user.id}"
         )
@@ -141,7 +197,7 @@ async def start_handler(message: types.Message):
 
 @dp.message(Command("clear"))
 async def clear_handler(message: types.Message):
-    if allowed_ids and message.from_user.id not in allowed_ids:
+    if not is_allowed(message.from_user.id):
         await message.answer("У вас нет доступа.")
         return
 
@@ -151,37 +207,111 @@ async def clear_handler(message: types.Message):
     await clear_chat_history(chat_id)
     await message.answer(f"{display_name}, история этого чата очищена.")
 
+
 @dp.message(Command("whoami"))
 async def whoami_handler(message: types.Message):
-
     user = message.from_user
-
     first_name = user.first_name or "нет"
     last_name = user.last_name or "нет"
-
-    if user.username:
-        username = "@" + user.username
-    else:
-        username = "нет"
-
-    user_id = user.id
-    chat_id = message.chat.id
+    username = f"@{user.username}" if user.username else "нет"
 
     text = (
         "Твоя информация:\n\n"
         f"Имя: {first_name}\n"
         f"Фамилия: {last_name}\n"
         f"Username: {username}\n\n"
-        f"Telegram ID: {user_id}\n"
-        f"Chat ID: {chat_id}"
+        f"Telegram ID: {user.id}\n"
+        f"Chat ID: {message.chat.id}"
     )
 
     await message.answer(text)
 
 
+@dp.message(Command("update_kb"))
+async def update_kb_handler(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    chat_id = str(message.chat.id)
+    waiting_for_kb_file.add(chat_id)
+
+    await message.answer(
+        "Пришли файл документом для обновления базы знаний.\n\n"
+        "Поддерживаются форматы: doc, docx, pdf, txt, md, xls, xlsx, csv, ppt, pptx, odt, html, json, xml, zip."
+    )
+
+
+@dp.message(F.document)
+async def document_handler(message: types.Message):
+    chat_id = str(message.chat.id)
+
+    if chat_id not in waiting_for_kb_file:
+        return
+
+    if not is_admin(message.from_user.id):
+        waiting_for_kb_file.discard(chat_id)
+        await message.answer("Эта команда доступна только администратору.")
+        return
+
+    document = message.document
+    filename = document.file_name or "document"
+    ext = os.path.splitext(filename)[1].lower()
+
+    if ext not in SUPPORTED_EXTENSIONS:
+        waiting_for_kb_file.discard(chat_id)
+        await message.answer(f"Формат файла {ext or 'без расширения'} не поддерживается.")
+        return
+
+    await message.answer(f"Получил файл: {filename}\nНачинаю обновление базы знаний...")
+
+    temp_path = None
+
+    try:
+        tg_file = await bot.get_file(document.file_id)
+
+        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+            temp_path = tmp.name
+
+        await bot.download_file(tg_file.file_path, destination=temp_path)
+
+        old_file_id = await get_kb_file_id(filename)
+        if old_file_id:
+            try:
+                client.vector_stores.files.delete(
+                    vector_store_id=VECTOR_STORE_ID,
+                    file_id=old_file_id
+                )
+            except Exception:
+                pass
+
+        with open(temp_path, "rb") as f:
+            uploaded = client.files.create(
+                file=f,
+                purpose="assistants"
+            )
+
+        client.vector_stores.files.create(
+            vector_store_id=VECTOR_STORE_ID,
+            file_id=uploaded.id
+        )
+
+        await save_kb_file_id(filename, uploaded.id)
+
+        await message.answer(f"Файл «{filename}» обновлён в базе знаний.")
+
+    except Exception as e:
+        await message.answer(f"Ошибка при обновлении базы знаний:\n{type(e).__name__}\n{e}")
+
+    finally:
+        waiting_for_kb_file.discard(chat_id)
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 @dp.message()
 async def handle_question(message: types.Message):
-    if allowed_ids and message.from_user.id not in allowed_ids:
+    if not is_allowed(message.from_user.id):
         await message.answer("У вас нет доступа.")
         return
 
