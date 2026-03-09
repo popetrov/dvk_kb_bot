@@ -14,7 +14,7 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
 ALLOWED_USER_IDS = os.getenv("ALLOWED_USER_IDS", "")
 ADMIN_USER_IDS = os.getenv("ADMIN_USER_IDS", "")
-DB_PATH = os.getenv("DB_PATH", "/data/bot_data.db")
+DB_PATH = os.getenv("DB_PATH", "bot_data.db")
 
 if not TELEGRAM_BOT_TOKEN:
     raise RuntimeError("Нет TELEGRAM_BOT_TOKEN")
