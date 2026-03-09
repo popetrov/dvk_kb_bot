@@ -151,6 +151,33 @@ async def clear_handler(message: types.Message):
     await clear_chat_history(chat_id)
     await message.answer(f"{display_name}, история этого чата очищена.")
 
+@dp.message(Command("whoami"))
+async def whoami_handler(message: types.Message):
+
+    user = message.from_user
+
+    first_name = user.first_name or "нет"
+    last_name = user.last_name or "нет"
+
+    if user.username:
+        username = "@" + user.username
+    else:
+        username = "нет"
+
+    user_id = user.id
+    chat_id = message.chat.id
+
+    text = (
+        "Твоя информация:\n\n"
+        f"Имя: {first_name}\n"
+        f"Фамилия: {last_name}\n"
+        f"Username: {username}\n\n"
+        f"Telegram ID: {user_id}\n"
+        f"Chat ID: {chat_id}"
+    )
+
+    await message.answer(text)
+
 
 @dp.message()
 async def handle_question(message: types.Message):
