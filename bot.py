@@ -293,10 +293,7 @@ async def kb_delete_command(message: types.Message):
     waiting_for_kb_delete.add(chat_id)
     waiting_for_kb_file.discard(chat_id)
 
-    header = (
-        "Файлы в базе знаний:\n\n"
-    )
-
+    header = "Файлы в базе знаний:\n\n"
     current_text = header
     messages_to_send = []
 
@@ -397,11 +394,18 @@ async def document_handler(message: types.Message):
 
 
 @dp.message(F.text)
-async def delete_filename_handler(message: types.Message):
+async def text_router(message: types.Message):
     chat_id = str(message.chat.id)
 
-    if chat_id not in waiting_for_kb_delete:
+    if chat_id in waiting_for_kb_delete:
+        await handle_kb_delete_filename(message)
         return
+
+    await handle_question(message)
+
+
+async def handle_kb_delete_filename(message: types.Message):
+    chat_id = str(message.chat.id)
 
     if not is_admin(message.from_user.id):
         waiting_for_kb_delete.discard(chat_id)
@@ -445,7 +449,6 @@ async def delete_filename_handler(message: types.Message):
         waiting_for_kb_delete.discard(chat_id)
 
 
-@dp.message()
 async def handle_question(message: types.Message):
     if not is_allowed(message.from_user.id):
         await message.answer("У вас нет доступа.")
