@@ -293,12 +293,29 @@ async def kb_delete_command(message: types.Message):
     waiting_for_kb_delete.add(chat_id)
     waiting_for_kb_file.discard(chat_id)
 
-    text = "Файлы в базе знаний:\n\n"
-    for f in files:
-        text += f"• {f}\n"
+    header = (
+        "Файлы в базе знаний:\n\n"
+    )
 
-    text += "\nОтправь точное имя файла, который нужно удалить."
-    await message.answer(text)
+    current_text = header
+    messages_to_send = []
+
+    for f in files:
+        line = f"• {f}\n"
+
+        if len(current_text) + len(line) > 3500:
+            messages_to_send.append(current_text)
+            current_text = line
+        else:
+            current_text += line
+
+    if current_text:
+        messages_to_send.append(current_text)
+
+    for part in messages_to_send:
+        await message.answer(part)
+
+    await message.answer("Отправь точное имя файла, который нужно удалить.")
 
 
 @dp.message(F.document)

@@ -47,27 +47,31 @@ async def save_kb_file_id(filename: str, openai_file_id: str):
 async def main():
     await init_db()
 
-    print("Получаю список файлов из vector store...")
-
-    files_page = client.vector_stores.files.list(
-        vector_store_id=VECTOR_STORE_ID
-    )
+    print("Получаю все файлы из vector store...")
 
     count = 0
 
-    for item in files_page.data:
+    # Авто-пагинация: пройдёт по всем страницам списка
+    for item in client.vector_stores.files.list(
+        vector_store_id=VECTOR_STORE_ID,
+        limit=100,
+    ):
         file_id = item.id
 
-        file_obj = client.files.retrieve(file_id)
-        filename = getattr(file_obj, "filename", None)
+        try:
+            file_obj = client.files.retrieve(file_id)
+            filename = getattr(file_obj, "filename", None)
 
-        if not filename:
-            print(f"Пропущен file_id={file_id}, не удалось получить имя файла.")
-            continue
+            if not filename:
+                print(f"Пропущен file_id={file_id}, не удалось получить имя файла.")
+                continue
 
-        await save_kb_file_id(filename, file_id)
-        print(f"Добавлен в локальную базу: {filename} -> {file_id}")
-        count += 1
+            await save_kb_file_id(filename, file_id)
+            print(f"Добавлен в локальную базу: {filename} -> {file_id}")
+            count += 1
+
+        except Exception as e:
+            print(f"Ошибка на file_id={file_id}: {type(e).__name__}: {e}")
 
     print(f"\nСинхронизация завершена. Добавлено файлов: {count}")
 
