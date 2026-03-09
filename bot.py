@@ -114,7 +114,7 @@ input_data = [
     }
 ]
 
-    for item in history:
+for item in history:
         input_data.append({
             "role": item["role"],
             "content": item["content"]
