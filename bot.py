@@ -267,13 +267,19 @@ async def document_handler(message: types.Message):
     document = message.document
     filename = document.file_name or "document"
     ext = os.path.splitext(filename)[1].lower()
+    display_name = get_display_name(message.from_user)
 
     if ext not in SUPPORTED_EXTENSIONS:
         waiting_for_kb_file.discard(chat_id)
-        await message.answer(f"Формат файла {ext or 'без расширения'} не поддерживается.")
+        await message.answer(
+            f"{display_name}, файл получен, но формат {ext or 'без расширения'} не поддерживается."
+        )
         return
 
-    await message.answer(f"Получил файл: {filename}\nНачинаю обновление базы знаний...")
+    await message.answer(
+        f"{display_name}, файл «{filename}» получен.\n"
+        f"Начинаю обновление базы знаний..."
+    )
 
     temp_path = None
 
@@ -308,13 +314,19 @@ async def document_handler(message: types.Message):
 
         await save_kb_file_id(filename, uploaded.id)
 
-        await message.answer(f"Файл «{filename}» обновлён в базе знаний.")
+        await message.answer(
+            f"{display_name}, файл «{filename}» успешно обновлён в базе знаний."
+        )
 
     except Exception as e:
-        await message.answer(f"Ошибка при обновлении базы знаний:\n{type(e).__name__}\n{e}")
+        await message.answer(
+            f"{display_name}, не удалось обновить файл «{filename}».\n\n"
+            f"Ошибка: {type(e).__name__}\n{e}"
+        )
 
     finally:
         waiting_for_kb_file.discard(chat_id)
+
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
