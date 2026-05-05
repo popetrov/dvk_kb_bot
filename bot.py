@@ -589,8 +589,12 @@ async def handle_question(message: types.Message):
 
 
 async def main():
+    print("BOT STARTING...")
     await init_db()
+    print("DB INIT OK")
     await bot.delete_webhook(drop_pending_updates=True)
+    print("WEBHOOK DELETED")
+    print("POLLING STARTED")
     await dp.start_polling(bot)
 
 
