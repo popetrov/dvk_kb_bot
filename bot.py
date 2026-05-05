@@ -418,6 +418,44 @@ async def kb_deduplicate_command(message: types.Message):
             f"Ошибка: {type(e).__name__}\n{e}"
         )
 
+@dp.message(Command("kb_clear_all"))
+async def kb_clear_all(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Только для админа")
+        return
+
+    await message.answer("Начинаю ПОЛНУЮ очистку Vector Store...")
+
+    deleted = 0
+
+    try:
+        for item in client.vector_stores.files.list(
+            vector_store_id=VECTOR_STORE_ID,
+            limit=100
+        ):
+            try:
+                client.vector_stores.files.delete(
+                    vector_store_id=VECTOR_STORE_ID,
+                    file_id=item.id
+                )
+                deleted += 1
+            except Exception as e:
+                print(f"ERROR DELETE: {e}", flush=True)
+
+        # чистим локальную базу
+        async with aiosqlite.connect(DB_PATH) as db:
+            await db.execute("DELETE FROM kb_files")
+            await db.commit()
+
+        await message.answer(
+            f"Готово.\n\nУдалено файлов: {deleted}"
+        )
+
+    except Exception as e:
+        await message.answer(
+            f"Ошибка очистки:\n{type(e).__name__}\n{e}"
+        )
+
 
 @dp.message(F.document)
 async def document_handler(message: types.Message):
