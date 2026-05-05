@@ -145,16 +145,6 @@ async def clear_chat_history(chat_id: str):
         await db.commit()
 
 
-async def get_kb_file_id(filename: str):
-    async with aiosqlite.connect(DB_PATH) as db:
-        cursor = await db.execute(
-            "SELECT openai_file_id FROM kb_files WHERE filename = ?",
-            (filename,)
-        )
-        row = await cursor.fetchone()
-        return row[0] if row else None
-
-
 async def save_kb_file_id(filename: str, openai_file_id: str):
     async with aiosqlite.connect(DB_PATH) as db:
         await db.execute(
@@ -187,6 +177,56 @@ async def delete_kb_file(filename: str):
         await db.commit()
 
 
+def normalize_filename(name) -> str:
+    if name is None:
+        return ""
+
+    if not isinstance(name, str):
+        name = str(name)
+
+    return name.strip().lower()
+
+
+def list_vector_store_files():
+    result = []
+
+    for item in client.vector_stores.files.list(
+        vector_store_id=VECTOR_STORE_ID,
+        limit=100
+    ):
+        try:
+            file_obj = client.files.retrieve(item.id)
+            filename = getattr(file_obj, "filename", None)
+
+            if filename:
+                result.append({
+                    "filename": filename,
+                    "file_id": item.id
+                })
+        except Exception as e:
+            print(f"Не удалось получить файл из Vector Store: {type(e).__name__}: {e}", flush=True)
+
+    return result
+
+
+def delete_all_vector_store_files_by_filename(filename: str) -> int:
+    target = normalize_filename(filename)
+    deleted_count = 0
+
+    for item in list_vector_store_files():
+        if normalize_filename(item["filename"]) == target:
+            try:
+                client.vector_stores.files.delete(
+                    vector_store_id=VECTOR_STORE_ID,
+                    file_id=item["file_id"]
+                )
+                deleted_count += 1
+            except Exception as e:
+                print(f"Не удалось удалить файл {item['file_id']}: {type(e).__name__}: {e}", flush=True)
+
+    return deleted_count
+
+
 def get_display_name(user: types.User) -> str:
     if user.first_name and user.first_name.strip():
         return user.first_name.strip()
@@ -209,6 +249,8 @@ def is_admin(user_id: int) -> bool:
 
 @dp.message(Command("start"))
 async def start_handler(message: types.Message):
+    print("START COMMAND RECEIVED", message.from_user.id, message.chat.id, flush=True)
+
     if not is_allowed(message.from_user.id):
         await message.answer(
             f"У вас нет доступа к базе знаний.\n\nВаш Telegram ID: {message.from_user.id}"
@@ -263,6 +305,8 @@ async def whoami_handler(message: types.Message):
 
 @dp.message(Command("update_kb"))
 async def update_kb_handler(message: types.Message):
+    print("UPDATE_KB COMMAND RECEIVED", message.from_user.id, message.chat.id, flush=True)
+
     if not is_admin(message.from_user.id):
         await message.answer("Эта команда доступна только администратору.")
         return
@@ -286,7 +330,11 @@ async def kb_delete_command(message: types.Message):
     files = await get_all_kb_files()
 
     if not files:
-        await message.answer("В базе знаний пока нет файлов.")
+        await message.answer("В локальном списке базы знаний пока нет файлов.")
+        await message.answer(
+            "Важно: это не значит, что OpenAI Vector Store пустой. "
+            "Если файлы загружались раньше, они могут быть в Vector Store."
+        )
         return
 
     chat_id = str(message.chat.id)
@@ -316,69 +364,15 @@ async def kb_delete_command(message: types.Message):
 
 
 @dp.message(F.document)
-
-def normalize_filename(name) -> str:
-    if name is None:
-        return ""
-
-    if not isinstance(name, str):
-        name = str(name)
-
-    return name.strip().lower()
-
-
-def list_vector_store_files():
-    result = []
-
-    for item in client.vector_stores.files.list(
-        vector_store_id=VECTOR_STORE_ID,
-        limit=100
-    ):
-        try:
-            file_obj = client.files.retrieve(item.id)
-            filename = getattr(file_obj, "filename", None)
-
-            if filename:
-                result.append({
-                    "filename": filename,
-                    "file_id": item.id
-                })
-        except Exception:
-            pass
-
-    return result
-
-
-def delete_all_vector_store_files_by_filename(filename: str) -> int:
-    target = normalize_filename(filename)
-    deleted_count = 0
-
-    for item in list_vector_store_files():
-        if normalize_filename(item["filename"]) == target:
-            try:
-                client.vector_stores.files.delete(
-                    vector_store_id=VECTOR_STORE_ID,
-                    file_id=item["file_id"]
-                )
-                deleted_count += 1
-            except Exception:
-                pass
-
-    return deleted_count
-
 async def document_handler(message: types.Message):
     chat_id = str(message.chat.id)
 
-    
-    print("DOCUMENT HANDLER STARTED")
-    print("chat_id:", chat_id)
-    print("waiting_for_kb_file:", waiting_for_kb_file)
+    print("DOCUMENT HANDLER STARTED", flush=True)
+    print("chat_id:", chat_id, flush=True)
+    print("waiting_for_kb_file:", waiting_for_kb_file, flush=True)
 
     if chat_id not in waiting_for_kb_file:
-        return
-
-    if chat_id not in waiting_for_kb_file:
-        print("DOCUMENT IGNORED: chat_id not waiting")
+        print("DOCUMENT IGNORED: chat_id not waiting", flush=True)
         return
 
     if not is_admin(message.from_user.id):
@@ -427,6 +421,7 @@ async def document_handler(message: types.Message):
             file_id=uploaded.id
         )
 
+        await save_kb_file_id(filename, uploaded.id)
         await clear_chat_history(chat_id)
 
         await message.answer(
@@ -590,12 +585,12 @@ async def handle_question(message: types.Message):
 
 
 async def main():
-    print("BOT STARTING...")
+    print("BOT STARTING...", flush=True)
     await init_db()
-    print("DB INIT OK")
+    print("DB INIT OK", flush=True)
     await bot.delete_webhook(drop_pending_updates=True)
-    print("WEBHOOK DELETED")
-    print("POLLING STARTED")
+    print("WEBHOOK DELETED", flush=True)
+    print("POLLING STARTED", flush=True)
     await dp.start_polling(bot)
 
 
