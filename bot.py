@@ -317,8 +317,14 @@ async def kb_delete_command(message: types.Message):
 
 @dp.message(F.document)
 
-def normalize_filename(name: str) -> str:
-    return (name or "").strip().lower()
+def normalize_filename(name) -> str:
+    if name is None:
+        return ""
+
+    if not isinstance(name, str):
+        name = str(name)
+
+    return name.strip().lower()
 
 
 def list_vector_store_files():
