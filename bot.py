@@ -378,6 +378,7 @@ async def document_handler(message: types.Message):
         return
 
     if chat_id not in waiting_for_kb_file:
+        print("DOCUMENT IGNORED: chat_id not waiting")
         return
 
     if not is_admin(message.from_user.id):
