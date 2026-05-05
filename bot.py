@@ -361,6 +361,62 @@ async def kb_delete_command(message: types.Message):
 
     await message.answer("Отправь точное имя файла, который нужно удалить.")
 
+async def kb_deduplicate_command(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администраторам.")
+        return
+
+    await message.answer("Начинаю удаление дублей в OpenAI Vector Store...")
+
+    try:
+        vector_files = list_vector_store_files()
+
+        grouped = {}
+        for item in vector_files:
+            filename_key = normalize_filename(item["filename"])
+            grouped.setdefault(filename_key, []).append(item)
+
+        deleted_count = 0
+        duplicate_groups = 0
+
+        for filename_key, items in grouped.items():
+            if len(items) <= 1:
+                continue
+
+            duplicate_groups += 1
+
+            # Оставляем первый файл, остальные удаляем
+            files_to_delete = items[1:]
+
+            for file_item in files_to_delete:
+                try:
+                    client.vector_stores.files.delete(
+                        vector_store_id=VECTOR_STORE_ID,
+                        file_id=file_item["file_id"]
+                    )
+                    deleted_count += 1
+                except Exception as e:
+                    print(
+                        f"Ошибка удаления дубля {file_item['filename']} {file_item['file_id']}: "
+                        f"{type(e).__name__}: {e}",
+                        flush=True
+                    )
+
+        await clear_chat_history(str(message.chat.id))
+
+        await message.answer(
+            f"Готово.\n\n"
+            f"Групп файлов с дублями: {duplicate_groups}\n"
+            f"Удалено дублей: {deleted_count}\n\n"
+            f"По каждому имени файла оставлен один экземпляр."
+        )
+
+    except Exception as e:
+        await message.answer(
+            f"Не удалось удалить дубли.\n\n"
+            f"Ошибка: {type(e).__name__}\n{e}"
+        )
+
 
 @dp.message(F.document)
 async def document_handler(message: types.Message):
