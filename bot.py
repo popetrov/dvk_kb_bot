@@ -400,6 +400,8 @@ async def document_handler(message: types.Message):
     temp_path = None
 
     try:
+        await message.answer("Шаг 0/4: скачиваю файл из Telegram...")
+
         tg_file = await bot.get_file(document.file_id)
 
         with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
@@ -407,15 +409,20 @@ async def document_handler(message: types.Message):
 
         await bot.download_file(tg_file.file_path, destination=temp_path)
 
+        await message.answer("Шаг 1/4: удаляю старые версии файла из OpenAI Vector Store...")
         deleted_count = delete_all_vector_store_files_by_filename(filename)
+
+        await message.answer("Шаг 2/4: очищаю локальную запись о файле...")
         await delete_kb_file(filename)
 
+        await message.answer("Шаг 3/4: загружаю новый файл в OpenAI...")
         with open(temp_path, "rb") as f:
             uploaded = client.files.create(
                 file=f,
                 purpose="assistants"
             )
 
+        await message.answer("Шаг 4/4: добавляю новый файл в базу знаний...")
         client.vector_stores.files.create(
             vector_store_id=VECTOR_STORE_ID,
             file_id=uploaded.id
@@ -431,6 +438,8 @@ async def document_handler(message: types.Message):
         )
 
     except Exception as e:
+        print(f"DOCUMENT UPDATE ERROR: {type(e).__name__}: {e}", flush=True)
+
         await message.answer(
             f"{display_name}, не удалось обновить файл «{filename}».\n\n"
             f"Ошибка: {type(e).__name__}\n{e}"
