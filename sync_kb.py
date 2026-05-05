@@ -10,7 +10,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 VECTOR_STORE_ID = os.getenv("VECTOR_STORE_ID")
 
-KB_DIR = Path(r"C:\Users\Пользователь\Desktop\dvk_kb_master")
+KB_DIR = Path("kb")
 MANIFEST_PATH = Path("kb_manifest.json")
 
 if not OPENAI_API_KEY:
