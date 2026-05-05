@@ -409,8 +409,8 @@ async def document_handler(message: types.Message):
 
         await bot.download_file(tg_file.file_path, destination=temp_path)
 
-        await message.answer("Шаг 1/4: временно пропускаю удаление старых версий...")
-        deleted_count = 0)
+        await message.answer("Шаг 1/4: удаляю старые версии файла из OpenAI Vector Store...")
+        deleted_count = 0
 
         await message.answer("Шаг 2/4: очищаю локальную запись о файле...")
         await delete_kb_file(filename)
