@@ -369,6 +369,14 @@ def delete_all_vector_store_files_by_filename(filename: str) -> int:
 async def document_handler(message: types.Message):
     chat_id = str(message.chat.id)
 
+    
+    print("DOCUMENT HANDLER STARTED")
+    print("chat_id:", chat_id)
+    print("waiting_for_kb_file:", waiting_for_kb_file)
+
+    if chat_id not in waiting_for_kb_file:
+        return
+
     if chat_id not in waiting_for_kb_file:
         return
 
