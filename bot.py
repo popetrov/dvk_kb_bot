@@ -361,6 +361,7 @@ async def kb_delete_command(message: types.Message):
 
     await message.answer("Отправь точное имя файла, который нужно удалить.")
 
+@dp.message(Command("kb_deduplicate"))
 async def kb_deduplicate_command(message: types.Message):
     if not is_admin(message.from_user.id):
         await message.answer("Эта команда доступна только администраторам.")
