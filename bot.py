@@ -316,6 +316,50 @@ async def kb_delete_command(message: types.Message):
 
 
 @dp.message(F.document)
+
+def normalize_filename(name: str) -> str:
+    return (name or "").strip().lower()
+
+
+def list_vector_store_files():
+    result = []
+
+    for item in client.vector_stores.files.list(
+        vector_store_id=VECTOR_STORE_ID,
+        limit=100
+    ):
+        try:
+            file_obj = client.files.retrieve(item.id)
+            filename = getattr(file_obj, "filename", None)
+
+            if filename:
+                result.append({
+                    "filename": filename,
+                    "file_id": item.id
+                })
+        except Exception:
+            pass
+
+    return result
+
+
+def delete_all_vector_store_files_by_filename(filename: str) -> int:
+    target = normalize_filename(filename)
+    deleted_count = 0
+
+    for item in list_vector_store_files():
+        if normalize_filename(item["filename"]) == target:
+            try:
+                client.vector_stores.files.delete(
+                    vector_store_id=VECTOR_STORE_ID,
+                    file_id=item["file_id"]
+                )
+                deleted_count += 1
+            except Exception:
+                pass
+
+    return deleted_count
+
 async def document_handler(message: types.Message):
     chat_id = str(message.chat.id)
 
@@ -354,15 +398,8 @@ async def document_handler(message: types.Message):
 
         await bot.download_file(tg_file.file_path, destination=temp_path)
 
-        old_file_id = await get_kb_file_id(filename)
-        if old_file_id:
-            try:
-                client.vector_stores.files.delete(
-                    vector_store_id=VECTOR_STORE_ID,
-                    file_id=old_file_id
-                )
-            except Exception:
-                pass
+        deleted_count = delete_all_vector_store_files_by_filename(filename)
+        await delete_kb_file(filename)
 
         with open(temp_path, "rb") as f:
             uploaded = client.files.create(
@@ -375,10 +412,12 @@ async def document_handler(message: types.Message):
             file_id=uploaded.id
         )
 
-        await save_kb_file_id(filename, uploaded.id)
+        await clear_chat_history(chat_id)
 
         await message.answer(
-            f"{display_name}, файл «{filename}» успешно обновлён в базе знаний."
+            f"{display_name}, файл «{filename}» успешно обновлён в базе знаний.\n"
+            f"Удалено старых версий: {deleted_count}.\n"
+            f"История этого чата очищена, чтобы бот не тянул старые ответы."
         )
 
     except Exception as e:
@@ -420,24 +459,27 @@ async def handle_kb_delete_filename(message: types.Message):
         await message.answer("Имя файла не указано.")
         return
 
-    file_id = await get_kb_file_id(filename)
-
-    if not file_id:
-        waiting_for_kb_delete.discard(chat_id)
-        await message.answer(f"{display_name}, файл с именем «{filename}» не найден в базе знаний.")
-        return
-
-    await message.answer(f"{display_name}, удаляю файл «{filename}» из базы знаний...")
+    await message.answer(f"{display_name}, ищу файл «{filename}» в базе знаний...")
 
     try:
-        client.vector_stores.files.delete(
-            vector_store_id=VECTOR_STORE_ID,
-            file_id=file_id
-        )
+        deleted_count = delete_all_vector_store_files_by_filename(filename)
+
+        if deleted_count == 0:
+            waiting_for_kb_delete.discard(chat_id)
+            await message.answer(
+                f"{display_name}, файл «{filename}» не найден в OpenAI Vector Store.\n\n"
+                f"Проверь точное имя файла через /kb_delete."
+            )
+            return
 
         await delete_kb_file(filename)
+        await clear_chat_history(chat_id)
 
-        await message.answer(f"{display_name}, файл «{filename}» удалён из базы знаний.")
+        await message.answer(
+            f"{display_name}, файл «{filename}» удалён из базы знаний.\n"
+            f"Удалено версий файла: {deleted_count}.\n"
+            f"История этого чата очищена, чтобы бот не тянул старую информацию."
+        )
 
     except Exception as e:
         await message.answer(
