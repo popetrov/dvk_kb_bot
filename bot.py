@@ -327,21 +327,20 @@ async def kb_delete_command(message: types.Message):
         await message.answer("Эта команда доступна только администраторам.")
         return
 
-    files = await get_all_kb_files()
+    await message.answer("Получаю актуальный список файлов из OpenAI Vector Store...")
+
+    vector_files = list_vector_store_files()
+    files = sorted([item["filename"] for item in vector_files])
 
     if not files:
-        await message.answer("В локальном списке базы знаний пока нет файлов.")
-        await message.answer(
-            "Важно: это не значит, что OpenAI Vector Store пустой. "
-            "Если файлы загружались раньше, они могут быть в Vector Store."
-        )
+        await message.answer("В OpenAI Vector Store сейчас нет файлов.")
         return
 
     chat_id = str(message.chat.id)
     waiting_for_kb_delete.add(chat_id)
     waiting_for_kb_file.discard(chat_id)
 
-    header = "Файлы в базе знаний:\n\n"
+    header = "Актуальные файлы в базе знаний:\n\n"
     current_text = header
     messages_to_send = []
 
@@ -484,10 +483,11 @@ async def handle_kb_delete_filename(message: types.Message):
         deleted_count = delete_all_vector_store_files_by_filename(filename)
 
         if deleted_count == 0:
+            await delete_kb_file(filename)
             waiting_for_kb_delete.discard(chat_id)
             await message.answer(
                 f"{display_name}, файл «{filename}» не найден в OpenAI Vector Store.\n\n"
-                f"Проверь точное имя файла через /kb_delete."
+                f"Я удалил его из локального списка, чтобы он больше не отображался в /kb_delete."
             )
             return
 
