@@ -190,21 +190,33 @@ def normalize_filename(name) -> str:
 def list_vector_store_files():
     result = []
 
-    for item in client.vector_stores.files.list(
+    page = client.vector_stores.files.list(
         vector_store_id=VECTOR_STORE_ID,
         limit=100
-    ):
-        try:
-            file_obj = client.files.retrieve(item.id)
-            filename = getattr(file_obj, "filename", None)
+    )
 
-            if filename:
+    while True:
+        for item in page.data:
+            try:
+                file_obj = client.files.retrieve(item.id)
+                filename = getattr(file_obj, "filename", None) or item.id
+
                 result.append({
                     "filename": filename,
                     "file_id": item.id
                 })
-        except Exception as e:
-            print(f"Не удалось получить файл из Vector Store: {type(e).__name__}: {e}", flush=True)
+
+            except Exception as e:
+                print(f"Не удалось получить файл из Vector Store: {type(e).__name__}: {e}", flush=True)
+
+        if not getattr(page, "has_more", False):
+            break
+
+        page = client.vector_stores.files.list(
+            vector_store_id=VECTOR_STORE_ID,
+            limit=100,
+            after=page.data[-1].id
+        )
 
     return result
 
@@ -456,6 +468,43 @@ async def kb_clear_all(message: types.Message):
             f"Ошибка очистки:\n{type(e).__name__}\n{e}"
         )
 
+@dp.message(Command("kb_status"))
+async def kb_status_command(message: types.Message):
+    if not is_admin(message.from_user.id):
+        await message.answer("Эта команда доступна только администраторам.")
+        return
+
+    await message.answer("Проверяю реальное содержимое OpenAI Vector Store...")
+
+    try:
+        files = list_vector_store_files()
+        files_sorted = sorted(files, key=lambda x: x["filename"].lower())
+
+        await message.answer(f"Всего файлов в Vector Store: {len(files_sorted)}")
+
+        if not files_sorted:
+            await message.answer("База знаний пустая.")
+            return
+
+        current_text = "Файлы в базе знаний:\n\n"
+
+        for item in files_sorted:
+            line = f"• {item['filename']}\n"
+
+            if len(current_text) + len(line) > 3500:
+                await message.answer(current_text)
+                current_text = line
+            else:
+                current_text += line
+
+        if current_text:
+            await message.answer(current_text)
+
+    except Exception as e:
+        await message.answer(
+            f"Не удалось проверить базу знаний.\n\n"
+            f"Ошибка: {type(e).__name__}\n{e}"
+        )
 
 @dp.message(F.document)
 async def document_handler(message: types.Message):
@@ -498,11 +547,11 @@ async def document_handler(message: types.Message):
 
         tg_file = await bot.get_file(document.file_id)
 
-        with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-            temp_path = tmp.name
+        safe_filename = os.path.basename(filename)
+        temp_dir = tempfile.mkdtemp()
+        temp_path = os.path.join(temp_dir, safe_filename)
 
         await bot.download_file(tg_file.file_path, destination=temp_path)
-
         await message.answer("Шаг 1/4: удаляю старые версии файла из OpenAI Vector Store...")
         deleted_count = 0
 
@@ -543,6 +592,14 @@ async def document_handler(message: types.Message):
         waiting_for_kb_file.discard(chat_id)
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
+        if temp_path:
+            temp_dir = os.path.dirname(temp_path)
+            if os.path.exists(temp_dir):
+                try:
+                    os.rmdir(temp_dir)
+                except Exception:
+                    pass
 
 
 @dp.message(F.text)
