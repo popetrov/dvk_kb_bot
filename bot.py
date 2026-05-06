@@ -436,31 +436,44 @@ async def kb_clear_all(message: types.Message):
         await message.answer("Только для админа")
         return
 
-    await message.answer("Начинаю ПОЛНУЮ очистку Vector Store...")
+    await message.answer("Начинаю ПОЛНУЮ очистку Vector Store. Удаляю все страницы файлов...")
 
     deleted = 0
 
     try:
-        for item in client.vector_stores.files.list(
-            vector_store_id=VECTOR_STORE_ID,
-            limit=100
-        ):
-            try:
-                client.vector_stores.files.delete(
-                    vector_store_id=VECTOR_STORE_ID,
-                    file_id=item.id
-                )
-                deleted += 1
-            except Exception as e:
-                print(f"ERROR DELETE: {e}", flush=True)
+        while True:
+            page = client.vector_stores.files.list(
+                vector_store_id=VECTOR_STORE_ID,
+                limit=100
+            )
 
-        # чистим локальную базу
+            items = list(page.data)
+
+            if not items:
+                break
+
+            for item in items:
+                try:
+                    client.vector_stores.files.delete(
+                        vector_store_id=VECTOR_STORE_ID,
+                        file_id=item.id
+                    )
+                    deleted += 1
+                except Exception as e:
+                    print(f"ERROR DELETE {item.id}: {e}", flush=True)
+
+            await message.answer(f"Удалено файлов на текущем проходе: {deleted}")
+
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM kb_files")
+            await db.execute("DELETE FROM chat_history")
             await db.commit()
 
         await message.answer(
-            f"Готово.\n\nУдалено файлов: {deleted}"
+            f"Готово.\n\n"
+            f"Vector Store очищен.\n"
+            f"Всего удалено файлов: {deleted}\n"
+            f"Локальная база и история чата очищены."
         )
 
     except Exception as e:
