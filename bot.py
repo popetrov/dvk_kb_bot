@@ -188,15 +188,30 @@ def normalize_filename(name) -> str:
 
 
 def list_vector_store_files():
+    """
+    Получает ВСЕ файлы из OpenAI Vector Store со всех страниц.
+    Это главный источник правды для /kb_status, /kb_delete, /kb_deduplicate.
+    """
     result = []
-
-    page = client.vector_stores.files.list(
-        vector_store_id=VECTOR_STORE_ID,
-        limit=100
-    )
+    after = None
 
     while True:
-        for item in page.data:
+        kwargs = {
+            "vector_store_id": VECTOR_STORE_ID,
+            "limit": 100
+        }
+
+        if after:
+            kwargs["after"] = after
+
+        page = client.vector_stores.files.list(**kwargs)
+
+        items = list(page.data)
+
+        if not items:
+            break
+
+        for item in items:
             try:
                 file_obj = client.files.retrieve(item.id)
                 filename = getattr(file_obj, "filename", None) or item.id
@@ -207,16 +222,19 @@ def list_vector_store_files():
                 })
 
             except Exception as e:
-                print(f"Не удалось получить файл из Vector Store: {type(e).__name__}: {e}", flush=True)
+                print(
+                    f"Не удалось получить файл из Vector Store {item.id}: {type(e).__name__}: {e}",
+                    flush=True
+                )
+                result.append({
+                    "filename": f"UNKNOWN_FILE_{item.id}",
+                    "file_id": item.id
+                })
 
         if not getattr(page, "has_more", False):
             break
 
-        page = client.vector_stores.files.list(
-            vector_store_id=VECTOR_STORE_ID,
-            limit=100,
-            after=page.data[-1].id
-        )
+        after = items[-1].id
 
     return result
 
@@ -234,7 +252,11 @@ def delete_all_vector_store_files_by_filename(filename: str) -> int:
                 )
                 deleted_count += 1
             except Exception as e:
-                print(f"Не удалось удалить файл {item['file_id']}: {type(e).__name__}: {e}", flush=True)
+                print(
+                    f"Не удалось удалить файл {item['filename']} {item['file_id']}: "
+                    f"{type(e).__name__}: {e}",
+                    flush=True
+                )
 
     return deleted_count
 
@@ -436,33 +458,31 @@ async def kb_clear_all(message: types.Message):
         await message.answer("Только для админа")
         return
 
-    await message.answer("Начинаю ПОЛНУЮ очистку Vector Store. Удаляю все страницы файлов...")
+    await message.answer("Начинаю ПОЛНУЮ очистку всей базы знаний Vector Store...")
 
     deleted = 0
 
     try:
         while True:
-            page = client.vector_stores.files.list(
-                vector_store_id=VECTOR_STORE_ID,
-                limit=100
-            )
+            files = list_vector_store_files()
 
-            items = list(page.data)
-
-            if not items:
+            if not files:
                 break
 
-            for item in items:
+            for item in files:
                 try:
                     client.vector_stores.files.delete(
                         vector_store_id=VECTOR_STORE_ID,
-                        file_id=item.id
+                        file_id=item["file_id"]
                     )
                     deleted += 1
                 except Exception as e:
-                    print(f"ERROR DELETE {item.id}: {e}", flush=True)
+                    print(
+                        f"ERROR DELETE {item['filename']} {item['file_id']}: {e}",
+                        flush=True
+                    )
 
-            await message.answer(f"Удалено файлов на текущем проходе: {deleted}")
+            await message.answer(f"Промежуточно удалено файлов: {deleted}")
 
         async with aiosqlite.connect(DB_PATH) as db:
             await db.execute("DELETE FROM kb_files")
@@ -471,7 +491,7 @@ async def kb_clear_all(message: types.Message):
 
         await message.answer(
             f"Готово.\n\n"
-            f"Vector Store очищен.\n"
+            f"Vector Store полностью очищен.\n"
             f"Всего удалено файлов: {deleted}\n"
             f"Локальная база и история чата очищены."
         )
@@ -487,7 +507,7 @@ async def kb_status_command(message: types.Message):
         await message.answer("Эта команда доступна только администраторам.")
         return
 
-    await message.answer("Проверяю реальное содержимое OpenAI Vector Store...")
+    await message.answer("Проверяю ВСЮ базу знаний OpenAI Vector Store...")
 
     try:
         files = list_vector_store_files()
@@ -731,7 +751,7 @@ async def handle_question(message: types.Message):
             tools=[{
                 "type": "file_search",
                 "vector_store_ids": [VECTOR_STORE_ID],
-                "max_num_results": 10
+                "max_num_results": 30
             }],
         )
 
